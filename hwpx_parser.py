@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-HWPX → JSON parser with EasyOCR (images → text in-place)
+HWPX → JSON parser with EasyOCR (images → text in-place, one line per image)
 
-Updates (2025-10-09)
-- 🔕 TOC 제거: 목차(목 차/목차/Contents 등)로 추정되는 문단은 기본 필터로 제외
-- 🧹 표 중복 제거: 표 내부 문단이 중복 출력되던 문제 해결(테이블을 원자 블록으로 처리)
-- 🖼️ 이미지 OCR 매핑 강화: 참조를 못 찾을 때도 아카이브 내 남은 이미지에서 순차 매칭하여 OCR 수행
+Updates (2025-10-10)
+- 이미지 OCR 결과: 한 이미지당 한 줄로 합쳐서 출력(join)
+- TOC 제거 기본 적용(목차/목 차/Contents 등)
+- 표 중복 제거: 테이블을 원자 블록으로 처리
+- 이미지 참조 불명 시 아카이브 내 남은 이미지 순차 매핑 시도
 
 출력 규칙
 - 문단: 한 문단 = 한 줄
 - 표: 각 행을 `col1 | col2 | ...` 로 직렬화(한 행 = 한 줄)
-- 이미지: 같은 위치에서 OCR 결과 줄들이 삽입(없으면 자리표시)
+- 이미지: 같은 위치에서 OCR 결과 **한 줄**로 삽입(없으면 자리표시)
 
 CLI
     python hwpx_parser_with_easyocr.py INPUT.hwpx --ocr --ocr-lang ko,en --pretty --out out.json
-
 """
 from __future__ import annotations
 import sys, os, re, io, zipfile, argparse, json, tempfile, shutil
@@ -86,7 +86,6 @@ def _rows_from_table(tbl: ET.Element) -> List[List[str]]:
             rows.append(row)
     return rows
 
-
 def _image_index(zf: zipfile.ZipFile) -> Dict[str, str]:
     idx: Dict[str, str] = {}
     for name in zf.namelist():
@@ -132,10 +131,10 @@ def _is_toc_line(s: str) -> bool:
         return False
     if any(p.search(s) for p in TOC_PATTERNS):
         return True
-    # 점선 리더나 과도한 페이지번호 패턴
+    # 점선 리더+페이지번호
     if DOT_LEADER.search(s) and re.search(r'\b\d{1,3}\b', s):
         return True
-    # 섹션 인덱스 스타일(숫자+항목) 과도 나열(짧은 문구에 기호만)
+    # 섹션 인덱스 스타일(숫자+항목) 과도 나열
     if re.match(r'^(?:\d+[\.|)]\s+){1,4}.+?$', s):
         return True
     return False
@@ -150,7 +149,7 @@ def _yield_top_blocks(root: ET.Element) -> Iterable[ET.Element]:
         lname = _local(el.tag)
         if lname == T_TBL:
             yield el
-            continue  # do not descend into table
+            continue  # atomic
         if lname in (T_P, T_IMG):
             yield el
         for ch in reversed(children):
@@ -186,6 +185,7 @@ def parse_hwpx_to_lines(path: str, use_ocr: bool = False, ocr_lang: str = 'ko,en
             for el in _yield_top_blocks(root):
                 lname = _local(el.tag)
 
+                # Paragraph
                 if lname == T_P:
                     s = _text_from_para(el)
                     if not s:
@@ -196,6 +196,7 @@ def parse_hwpx_to_lines(path: str, use_ocr: bool = False, ocr_lang: str = 'ko,en
                         continue
                     lines.append(s)
 
+                # Table (atomic block)
                 elif lname == T_TBL:
                     rows = _rows_from_table(el)
                     ser = [' | '.join(r) for r in rows if any(c for c in r)]
@@ -203,6 +204,7 @@ def parse_hwpx_to_lines(path: str, use_ocr: bool = False, ocr_lang: str = 'ko,en
                         lines.extend(ser)
                         last_table_rows = ser
 
+                # Image
                 elif lname == T_IMG:
                     if use_ocr and reader is not None:
                         ref = None
@@ -221,7 +223,12 @@ def parse_hwpx_to_lines(path: str, use_ocr: bool = False, ocr_lang: str = 'ko,en
                             try:
                                 ocr_txts = _ocr_image(reader, zf.read(img_name))
                                 if ocr_txts:
-                                    lines.extend(ocr_txts)
+                                    # --- one line per image ---
+                                    one_line = ' '.join(t.strip() for t in ocr_txts if t.strip()).strip()
+                                    if one_line:
+                                        lines.append(one_line)
+                                    else:
+                                        lines.append('그림입니다. (OCR 결과 없음)')
                                 else:
                                     lines.append('그림입니다. (OCR 결과 없음)')
                             except Exception:
@@ -231,12 +238,16 @@ def parse_hwpx_to_lines(path: str, use_ocr: bool = False, ocr_lang: str = 'ko,en
                     else:
                         lines.append('그림입니다.')
 
+        # Optional: if no "그림입니다"가 없고 남은 이미지가 있으면 후처리로 OCR
         if use_ocr and reader is not None and not any('그림입니다' in s for s in lines):
             for ip in remaining_imgs:
                 try:
                     ocr_txts = _ocr_image(reader, zf.read(ip))
                     if ocr_txts:
-                        lines.extend(ocr_txts)
+                        # --- one line per image (post pass) ---
+                        one_line = ' '.join(t.strip() for t in ocr_txts if t.strip()).strip()
+                        if one_line:
+                            lines.append(one_line)
                 except Exception:
                     pass
 
