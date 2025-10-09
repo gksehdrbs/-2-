@@ -1,224 +1,272 @@
 # -*- coding: utf-8 -*-
-# hwp_flat_lines_json_v2.py
-# - .hwp(HWP5, OLE) / .hwpx(ZIP+XML) 자동 감지
-# - 문서와 유사하게 "세로로 한 줄씩" JSON 배열에 담아서 출력
-# - HWPX: p/para/paragraph/br/tbl/tr/tc/title 등에서 줄바꿈
-# - HWP : 문단 텍스트 레코드(66)마다 줄바꿈
-# - 옵션: --hard-wrap N  (긴 줄 강제 줄나눔)
+"""
+HWPX → JSON parser with EasyOCR (images → text in-place)
 
-#py -3.13 -X utf8 hwp_flat_lines_json_v2.py "C:\Users\LG\조나우배터리 투자 보고서.hwpx" --out out.json --pretty
+Updates (2025-10-09)
+- 🔕 TOC 제거: 목차(목 차/목차/Contents 등)로 추정되는 문단은 기본 필터로 제외
+- 🧹 표 중복 제거: 표 내부 문단이 중복 출력되던 문제 해결(테이블을 원자 블록으로 처리)
+- 🖼️ 이미지 OCR 매핑 강화: 참조를 못 찾을 때도 아카이브 내 남은 이미지에서 순차 매칭하여 OCR 수행
 
+출력 규칙
+- 문단: 한 문단 = 한 줄
+- 표: 각 행을 `col1 | col2 | ...` 로 직렬화(한 행 = 한 줄)
+- 이미지: 같은 위치에서 OCR 결과 줄들이 삽입(없으면 자리표시)
+
+CLI
+    python hwpx_parser_with_easyocr.py INPUT.hwpx --ocr --ocr-lang ko,en --pretty --out out.json
+
+"""
 from __future__ import annotations
-import sys, struct, zlib, json, re
-from pathlib import Path
-import zipfile, xml.etree.ElementTree as ET
+import sys, os, re, io, zipfile, argparse, json, tempfile, shutil
+import xml.etree.ElementTree as ET
+from typing import List, Dict, Tuple, Optional, Iterable
 
-# 콘솔 UTF-8
-if hasattr(sys.stdout, "reconfigure"):
-    try: sys.stdout.reconfigure(encoding="utf-8")
-    except Exception: pass
-
-# hwp(OLE) 선택 의존성
+# ------- Optional EasyOCR -------
 try:
-    import olefile
-    _HAS_OLE = True
+    import easyocr  # type: ignore
+    _HAS_EASYOCR = True
 except Exception:
-    _HAS_OLE = False
+    _HAS_EASYOCR = False
 
-OLE_SIG = b"\xD0\xCF\x11\xE0"
-ZIP_SIG = b"PK\x03\x04"
-HWPTAG_PARA_TEXT = 66
-
-def detect_container(p: Path) -> str:
-    if not p.is_file():
-        raise FileNotFoundError(f"파일을 찾을 수 없습니다: {p}")
-    head = p.read_bytes()[:8]
-    if head.startswith(OLE_SIG): return "HWP5"
-    if head.startswith(ZIP_SIG): return "HWPX"
-    ext = p.suffix.lower()
-    if ext == ".hwp": return "HWP5"
-    if ext == ".hwpx": return "HWPX"
-    return "UNKNOWN"
-
-# ---------------- HWP (.hwp) ----------------
-def _read_fileheader(ole: "olefile.OleFileIO") -> dict:
-    with ole.openstream("FileHeader") as fp:
-        raw = fp.read()
-    if len(raw) < 48: raise ValueError("FileHeader 길이 오류")
-    ver,   = struct.unpack("<I", raw[32:36])
-    attr1, = struct.unpack("<I", raw[36:40])  # bit0=compressed, bit1=encrypted
-    return {"compressed": bool(attr1 & 1), "encrypted": bool(attr1 & 2), "ver": ver}
-
-def _iter_records(buf: bytes):
-    off, n = 0, len(buf)
-    while off + 4 <= n:
-        (hdr,) = struct.unpack("<I", buf[off:off+4]); off += 4
-        tag   =  hdr        & 0x3FF
-        size  = (hdr >> 20) & 0xFFF
-        if size == 0xFFF:
-            if off + 4 > n: break
-            (size,) = struct.unpack("<I", buf[off:off+4]); off += 4
-        if off + size > n:
-            payload = buf[off:n]; off = n
-        else:
-            payload = buf[off:off+size]; off += size
-        yield tag, payload
-
-def _zlib_if_needed(raw: bytes, expect: bool) -> bytes:
-    if not expect: return raw
-    try: return zlib.decompress(raw)
-    except Exception: return raw
-
-def extract_hwp_lines(path: Path) -> list[str]:
-    if not _HAS_OLE:
-        raise RuntimeError("olefile 모듈이 필요합니다. (pip install olefile)")
-    out: list[str] = []
-    with olefile.OleFileIO(str(path)) as ole:
-        hdr = _read_fileheader(ole)
-        if hdr["encrypted"]:
-            raise RuntimeError("암호화된 HWP는 지원하지 않습니다.")
-        entries = [e for e in ole.listdir(streams=True, storages=True)
-                   if len(e)==2 and e[0]=="BodyText" and e[1].startswith("Section")]
-        entries.sort(key=lambda e:int("".join(ch for ch in e[1] if ch.isdigit()) or "0"))
-        for e in entries:
-            with ole.openstream("/".join(e)) as fp:
-                raw = fp.read()
-            data = _zlib_if_needed(raw, hdr["compressed"])
-            # 레코드 순회: 문단 텍스트(66)마다 줄 하나
-            for tag, payload in _iter_records(data):
-                if tag == HWPTAG_PARA_TEXT:
-                    s = payload.decode("utf-16le", errors="ignore")
-                    s = s.replace("\r","\n")
-                    # 빈 줄 제거, 제어문자 제거
-                    for ln in s.split("\n"):
-                        ln = "".join(ch if (ch >= " " or ch in "\t") else " " for ch in ln).strip()
-                        if ln:
-                            out.append(ln)
-    return out
-
-# ---------------- HWPX (.hwpx) ----------------
-def _lname(tag: str) -> str:
-    """{ns}local → local"""
-    if "}" in tag: return tag.rsplit("}",1)[1]
-    return tag
-
-# 문단/줄 경계로 취급할 요소 로컬명(소문자)
-_PARA_END = {
-    "p","para","paragraph","line","li","item","title","subtitle","caption",
+# ------- Namespaces (best-effort) -------
+NS = {
+    'w': 'http://www.hancom.co.kr/hwpml/2011/wordprocessor',
+    'hp': 'http://www.hancom.co.kr/hwpml/2011/paragraph',
+    'hc': 'http://www.hancom.co.kr/hwpml/2011/common',
+    'r':  'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
 }
-_BR = {"br","linebreak"}
-# 표 관련 요소에서 최소 줄바꿈: 행/셀 시작 전후로 잘라주면 세로 정렬에 유리
-_TABLE_BREAK = {"tbl","table","tr","row","tc","cell","th","thead","tbody","tfoot"}
+for k, v in NS.items():
+    ET.register_namespace(k, v)
 
-def extract_hwpx_lines(path: Path) -> list[str]:
-    out: list[str] = []
-    with zipfile.ZipFile(str(path)) as z:
-        sections = sorted([n for n in z.namelist()
-                           if n.startswith("Contents/section") and n.endswith(".xml")])
-        if not sections:
-            sections = sorted([n for n in z.namelist() if n.lower().endswith(".xml")])
+# Localnames we care about
+T_P   = 'p'
+T_RUN = 'run'
+T_T   = 't'
+T_TBL = 'tbl'
+T_TR  = 'tr'
+T_TC  = 'tc'
+T_IMG = 'img'
 
-        for name in sections:
+IMG_EXTS = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tif', '.tiff', '.webp'}
+
+# ----------------- helpers -----------------
+def _local(tag: str) -> str:
+    return tag.rsplit('}', 1)[1] if '}' in tag else tag
+
+def _iter_sections(zf: zipfile.ZipFile) -> List[str]:
+    names = [n for n in zf.namelist() if n.startswith('Contents/') and n.endswith('.xml')]
+    sections = sorted([n for n in names if re.search(r'/section\d+\.xml$', n)],
+                      key=lambda s: int(re.search(r'(\d+)', s).group(1)) if re.search(r'(\d+)', s) else 0)
+    others = sorted(set(names) - set(sections))
+    return sections + others
+
+def _text_from_para(p: ET.Element) -> str:
+    parts: List[str] = []
+    for run in p.iter():
+        if _local(run.tag) == T_T and run.text:
+            parts.append(run.text)
+    s = re.sub(r'\s+', ' ', ''.join(parts)).strip()
+    return s
+
+def _rows_from_table(tbl: ET.Element) -> List[List[str]]:
+    rows: List[List[str]] = []
+    for tr in list(tbl):
+        if _local(tr.tag) != T_TR:
+            continue
+        row: List[str] = []
+        for tc in list(tr):
+            if _local(tc.tag) != T_TC:
+                continue
+            cell_parts: List[str] = []
+            for node in tc.iter():
+                if _local(node.tag) == T_T and node.text:
+                    cell_parts.append(node.text)
+            row.append(re.sub(r'\s+', ' ', ''.join(cell_parts)).strip())
+        if any(x for x in row):
+            rows.append(row)
+    return rows
+
+
+def _image_index(zf: zipfile.ZipFile) -> Dict[str, str]:
+    idx: Dict[str, str] = {}
+    for name in zf.namelist():
+        ext = os.path.splitext(name)[1].lower()
+        if ext in IMG_EXTS and name.startswith('Contents/'):
+            base = os.path.basename(name)
+            idx[base] = name
+            idx[os.path.splitext(base)[0]] = name
+    return idx
+
+# --- OCR ---
+def _ocr_image(reader, img_bytes: bytes) -> List[str]:
+    try:
+        import numpy as np, cv2
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is not None:
+            return [s.strip() for s in reader.readtext(img, detail=0) if s.strip()]
+    except Exception:
+        pass
+    # Fallback temp file path
+    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+        tmp.write(img_bytes)
+        tmp.flush()
+        p = tmp.name
+    try:
+        return [s.strip() for s in reader.readtext(p, detail=0) if s.strip()]
+    finally:
+        try: os.unlink(p)
+        except Exception: pass
+
+# --- TOC filter ---
+TOC_PATTERNS = [
+    re.compile(r'\b목\s*차\b'),
+    re.compile(r'\b목차\b'),
+    re.compile(r'\bTable of Contents\b', re.I),
+    re.compile(r'^(?:[IVXLC]+|[Ⅰ-Ⅹ]+)[\.)]\s'),  # roman numerals
+]
+DOT_LEADER = re.compile(r'\.{3,}')
+
+def _is_toc_line(s: str) -> bool:
+    if not s:
+        return False
+    if any(p.search(s) for p in TOC_PATTERNS):
+        return True
+    # 점선 리더나 과도한 페이지번호 패턴
+    if DOT_LEADER.search(s) and re.search(r'\b\d{1,3}\b', s):
+        return True
+    # 섹션 인덱스 스타일(숫자+항목) 과도 나열(짧은 문구에 기호만)
+    if re.match(r'^(?:\d+[\.|)]\s+){1,4}.+?$', s):
+        return True
+    return False
+
+# --- top-level block traversal (table is atomic) ---
+def _yield_top_blocks(root: ET.Element) -> Iterable[ET.Element]:
+    """Depth-first traversal but treat <tbl> as atomic: don't yield its children separately."""
+    stack = [root]
+    while stack:
+        el = stack.pop()
+        children = list(el)
+        lname = _local(el.tag)
+        if lname == T_TBL:
+            yield el
+            continue  # do not descend into table
+        if lname in (T_P, T_IMG):
+            yield el
+        for ch in reversed(children):
+            stack.append(ch)
+
+# ----------------- main parse -----------------
+def parse_hwpx_to_lines(path: str, use_ocr: bool = False, ocr_lang: str = 'ko,en', drop_toc: bool = True) -> List[str]:
+    if not zipfile.is_zipfile(path):
+        raise ValueError('Not a valid HWPX (zip) file: %s' % path)
+
+    lines: List[str] = []
+
+    reader = None
+    if use_ocr and _HAS_EASYOCR:
+        langs = [x.strip() for x in ocr_lang.split(',') if x.strip()]
+        reader = easyocr.Reader(langs)
+    elif use_ocr and not _HAS_EASYOCR:
+        print('[warn] --ocr requested but easyocr is not available. Proceeding without OCR.', file=sys.stderr)
+
+    with zipfile.ZipFile(path, 'r') as zf:
+        img_idx = _image_index(zf)
+        remaining_imgs = [n for n in zf.namelist() if os.path.splitext(n)[1].lower() in IMG_EXTS]
+        rem_i = 0
+
+        for sec in _iter_sections(zf):
             try:
-                root = ET.fromstring(z.read(name))
+                root = ET.fromstring(zf.read(sec))
             except Exception:
                 continue
 
-            buf: list[str] = []  # 현재 문단/셀 버퍼
+            last_table_rows: List[str] = []
 
-            def flush():
-                # 버퍼 → 한 줄
-                nonlocal buf
-                line = "".join(buf)
-                # 연속 공백 정리
-                line = re.sub(r"[ \t\u00A0]{2,}", " ", line)
-                line = line.strip()
-                if line:
-                    out.append(line)
-                buf = []
+            for el in _yield_top_blocks(root):
+                lname = _local(el.tag)
 
-            # 깊이우선 순회
-            stack = [root]
-            while stack:
-                node = stack.pop()
-                # 노드의 텍스트
-                if node.text:
-                    buf.append(node.text)
+                if lname == T_P:
+                    s = _text_from_para(el)
+                    if not s:
+                        continue
+                    if drop_toc and _is_toc_line(s):
+                        continue
+                    if drop_toc and s.strip() in ('목차', '목 차', 'Contents', 'Table of Contents'):
+                        continue
+                    lines.append(s)
 
-                lname = _lname(node.tag).lower()
-                if lname in _BR:
-                    flush()
-                # 표 요소에서 살짝 잘라 넣기 (셀/행/표 경계)
-                if lname in _TABLE_BREAK:
-                    flush()
+                elif lname == T_TBL:
+                    rows = _rows_from_table(el)
+                    ser = [' | '.join(r) for r in rows if any(c for c in r)]
+                    if ser and ser != last_table_rows:
+                        lines.extend(ser)
+                        last_table_rows = ser
 
-                # 자식 push (역순으로 push하여 원래 순서대로 pop)
-                children = list(node)
-                for child in reversed(children):
-                    stack.append(child)
+                elif lname == T_IMG:
+                    if use_ocr and reader is not None:
+                        ref = None
+                        for attr in ('src', 'ref', '{%s}link' % NS['r'], 'link', 'r:id'):
+                            if attr in el.attrib:
+                                ref = el.attrib.get(attr)
+                                break
+                        img_name = None
+                        if ref:
+                            base = os.path.basename(ref)
+                            img_name = img_idx.get(base) or img_idx.get(os.path.splitext(base)[0])
+                        if not img_name and rem_i < len(remaining_imgs):
+                            img_name = remaining_imgs[rem_i]
+                            rem_i += 1
+                        if img_name and img_name in zf.namelist():
+                            try:
+                                ocr_txts = _ocr_image(reader, zf.read(img_name))
+                                if ocr_txts:
+                                    lines.extend(ocr_txts)
+                                else:
+                                    lines.append('그림입니다. (OCR 결과 없음)')
+                            except Exception:
+                                lines.append('그림입니다. (OCR 오류)')
+                        else:
+                            lines.append('그림입니다. (이미지 참조 불명)')
+                    else:
+                        lines.append('그림입니다.')
 
-                # 노드 종료 텍스트 tail
-                if node.tail:
-                    buf.append(node.tail)
+        if use_ocr and reader is not None and not any('그림입니다' in s for s in lines):
+            for ip in remaining_imgs:
+                try:
+                    ocr_txts = _ocr_image(reader, zf.read(ip))
+                    if ocr_txts:
+                        lines.extend(ocr_txts)
+                except Exception:
+                    pass
 
-                # 문단/목록 항목/제목 계열 끝나면 줄바꿈
-                if lname in _PARA_END:
-                    flush()
+    return lines
 
-            # 섹션 끝나고 남은 버퍼
-            flush()
+# ----------------- CLI -----------------
+def main():
+    ap = argparse.ArgumentParser(description='HWPX → JSON lines with EasyOCR. TOC filtered, tables deduped.')
+    ap.add_argument('input')
+    ap.add_argument('--ocr', action='store_true', help='Enable EasyOCR for images')
+    ap.add_argument('--ocr-lang', default='ko,en', help='Languages for EasyOCR (comma sep)')
+    ap.add_argument('--keep-toc', action='store_true', help='Do NOT filter out table of contents')
+    ap.add_argument('--out', default='-', help='Output .json path or - for stdout')
+    ap.add_argument('--pretty', action='store_true', help='Pretty-print JSON')
+    args = ap.parse_args()
 
-    return out
+    lines = parse_hwpx_to_lines(
+        args.input,
+        use_ocr=args.ocr,
+        ocr_lang=args.ocr_lang,
+        drop_toc=(not args.keep_toc)
+    )
 
-# ---------------- 유틸 ----------------
-def hard_wrap_lines(lines: list[str], width: int) -> list[str]:
-    if width <= 0: return lines
-    wrapped: list[str] = []
-    for ln in lines:
-        s = ln
-        while len(s) > width:
-            # 문장부호/공백 기준으로 자연스레 자르기
-            cut = s.rfind(" ", 0, width)
-            if cut < width * 0.6:
-                # 공백이 없으면 문장부호 시도
-                for p in (". ", ") ", "] ", "· ", "• ", ", "):
-                    pos = s.rfind(p, 0, width)
-                    if pos > 0: cut = pos + len(p)-1; break
-            if cut <= 0: cut = width
-            wrapped.append(s[:cut].rstrip())
-            s = s[cut:].lstrip()
-        if s: wrapped.append(s)
-    return wrapped
-
-# ---------------- 메인 ----------------
-def extract_any_lines(path: Path) -> tuple[str, list[str]]:
-    kind = detect_container(path)
-    if kind == "HWP5": return "HWP5", extract_hwp_lines(path)
-    if kind == "HWPX": return "HWPX", extract_hwpx_lines(path)
-    raise ValueError("알 수 없는 형식입니다(.hwp/.hwpx)")
-
-def main(argv=None):
-    import argparse
-    ap = argparse.ArgumentParser(description="HWP/HWPX → JSON(lines) (문단/표 경계 줄바꿈 반영)")
-    ap.add_argument("input", help="입력 파일(.hwp/.hwpx)")
-    ap.add_argument("--out", help="출력 JSON 경로(UTF-8)")
-    ap.add_argument("--pretty", action="store_true", help="들여쓰기 출력")
-    ap.add_argument("--hard-wrap", type=int, default=0, help="긴 줄 강제 줄나눔 폭(0=해제)")
-    args = ap.parse_args(argv)
-
-    p = Path(args.input)
-    fmt, lines = extract_any_lines(p)
-
-    if args.hard_wrap and args.hard_wrap > 0:
-        lines = hard_wrap_lines(lines, args.hard_wrap)
-
-    obj = {"file": str(p), "format": fmt, "lines": lines}
-    text = json.dumps(obj, ensure_ascii=False, indent=2 if args.pretty else None)
-
-    if args.out:
-        Path(args.out).write_text(text, encoding="utf-8")
+    js = json.dumps(lines, ensure_ascii=False, indent=2 if args.pretty else None)
+    if args.out == '-' or args.out.lower() == 'stdout':
+        print(js)
     else:
-        sys.stdout.write(text)
+        with open(args.out, 'w', encoding='utf-8') as f:
+            f.write(js)
+        print(f'[ok] wrote {args.out}')
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
