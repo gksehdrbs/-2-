@@ -1,0 +1,132 @@
+/* login.css */
+
+/* 기본 스타일 & 헤더 (style.css에서 가져옴) */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Roboto", "Segoe UI", sans-serif;
+    margin: 0;
+    background-color: #F9F9F9;
+    color: #121212;
+    -webkit-font-smoothing: antialiased;
+}
+
+a { text-decoration: none; color: inherit; }
+.container { max-width: 1200px; margin: 0 auto; padding: 0 40px; }
+
+.main-header { display: flex; justify-content: space-between; align-items: center; padding: 25px 0; }
+.logo { display: flex; align-items: center; font-size: 20px; font-weight: 600; }
+.logo img { height: 32px; margin-right: 12px; }
+.main-nav { display: flex; gap: 40px; }
+.main-nav a { color: #555; }
+.login-btn { background-color: #0055FF; color: white; font-weight: 500; padding: 12px 28px; border-radius: 8px; }
+
+/* --- 로그인 폼 전용 스타일 --- */
+.login-section {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 60px 0;
+}
+
+.login-wrapper {
+    display: flex;
+    width: 1000px;
+    height: 680px; /* 기존 600px에서 680px로 수정 */
+    background-color: #DDE8FF; /* 연한 파랑 배경 */
+    border-radius: 24px;
+    padding: 20px;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
+}
+
+.image-panel {
+    flex: 1; /* 왼쪽 패널이 남는 공간을 모두 차지 */
+    background-image: url('images/login-bg.svg'); /* <<< Figma에서 왼쪽 패널 이미지를 이 이름으로 저장하세요! */
+    background-size: cover;
+    background-position: center;
+    border-radius: 16px;
+}
+
+.form-panel {
+    flex: 1; /* 오른쪽 패널 */
+    background-color: white;
+    border-radius: 16px;
+    padding: 50px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.form-panel h2 {
+    font-size: 28px;
+    font-weight: 600;
+    margin: 0 0 20px 0;
+    text-align: center;
+}
+
+.tabs {
+    display: flex;
+    border-bottom: 1px solid #eee;
+    margin-bottom: 30px;
+}
+.tab-btn {
+    flex: 1;
+    padding: 15px;
+    border: none;
+    background: none;
+    font-size: 16px;
+    cursor: pointer;
+    color: #888;
+    border-bottom: 2px solid transparent;
+}
+.tab-btn.active {
+    color: #121212;
+    font-weight: 600;
+    border-bottom-color: #0055FF;
+}
+
+.input-group {
+    display: flex;
+    align-items: center;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 0 15px;
+    margin-bottom: 20px;
+}
+.input-group span { color: #888; }
+.input-group input {
+    flex: 1;
+    border: none;
+    outline: none;
+    padding: 15px 10px;
+    font-size: 16px;
+}
+
+.forgot-password {
+    display: block;
+    text-align: right;
+    font-size: 14px;
+    color: #555;
+    margin-bottom: 30px;
+}
+
+.continue-btn {
+    width: 100%;
+    background-color: #0055FF; /* 비활성화된 듯한 연한 파랑 */
+    color: white;
+    font-size: 16px;
+    font-weight: 600;
+    padding: 16px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.signup-link {
+    text-align: center;
+    margin-top: 30px;
+    font-size: 14px;
+    color: #555;
+}
+.signup-link a {
+    color: #0055FF;
+    font-weight: 600;
+}

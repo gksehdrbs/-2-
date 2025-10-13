@@ -1,0 +1,118 @@
+/* signup.css */
+
+/* 기본 스타일 & 헤더 (login.css에서 가져옴) */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Roboto", "Segoe UI", sans-serif;
+    margin: 0;
+    background-color: #F9F9F9;
+    color: #121212;
+    -webkit-font-smoothing: antialiased;
+}
+
+a { text-decoration: none; color: inherit; }
+.container { max-width: 1200px; margin: 0 auto; padding: 0 40px; }
+
+.main-header { display: flex; justify-content: space-between; align-items: center; padding: 25px 0; }
+.logo { display: flex; align-items: center; font-size: 20px; font-weight: 600; }
+.logo img { height: 32px; margin-right: 12px; }
+.main-nav { display: flex; gap: 40px; }
+.main-nav a { color: #555; }
+.login-btn { background-color: #0055FF; color: white; font-weight: 500; padding: 12px 28px; border-radius: 8px; }
+
+/* --- 회원가입 폼 전용 스타일 --- */
+.signup-section {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 60px 0;
+}
+
+.signup-wrapper {
+    display: flex;
+    width: 1000px;
+    height: 680px; /* min-height를 height로 바꾸고 값을 680px로 수정 */
+    background-color: #DDE8FF;
+    border-radius: 24px;
+    padding: 20px;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
+}
+
+.image-panel {
+    flex: 1;
+    background-image: url('images/login-bg.svg'); /* 로그인과 동일한 배경 이미지 사용 */
+    background-size: cover;
+    background-position: center;
+    border-radius: 16px;
+}
+
+.form-panel {
+    flex: 1;
+    background-color: white;
+    border-radius: 16px;
+    padding: 50px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.form-panel h2 {
+    font-size: 28px;
+    font-weight: 600;
+    margin: 0;
+    text-align: center;
+}
+
+.subtitle {
+    text-align: center;
+    color: #666;
+    margin-top: 8px;
+    margin-bottom: 30px;
+}
+
+.input-group {
+    display: flex;
+    align-items: center;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 0 15px;
+    margin-bottom: 20px;
+}
+.input-group span { color: #888; }
+.input-group input {
+    flex: 1;
+    border: none;
+    outline: none;
+    padding: 15px 10px;
+    font-size: 16px;
+}
+
+.remember-me {
+    display: flex;
+    align-items: center;
+    margin-bottom: 30px;
+    font-size: 14px;
+}
+.remember-me input { margin-right: 8px; }
+
+.continue-btn {
+    width: 100%;
+    background-color: #0055FF;
+    color: white;
+    font-size: 16px;
+    font-weight: 600;
+    padding: 16px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.login-link {
+    text-align: center;
+    margin-top: 30px;
+    font-size: 14px;
+    color: #555;
+}
+.login-link a {
+    color: #0055FF;
+    font-weight: 600;
+}

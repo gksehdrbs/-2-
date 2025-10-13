@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload - HS Capital Investment</title>
+    <link rel="stylesheet" href="upload.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
+</head>
+<body>
+    <div class="container">
+        <header class="main-header">
+            <a href="index.html" class="logo">
+                <img src="images/logo.svg" alt="HS Capital Investment Logo">
+                <span>HS capital investment</span>
+            </a>
+            <nav class="main-nav">
+                <a href="index.html#about-us">About us</a>
+                <a href="#">Check permission</a>
+                <a href="upload.html">upload</a>
+            </nav>
+            <a href="login.html" class="login-btn">Login</a>
+        </header>
+
+        <main class="upload-main">
+            <h1>Upload</h1>
+            <div class="report-type-selection">
+                <input type="radio" id="type-internal" name="report-type">
+                <label for="type-internal">기밀 보고서</label>
+                <input type="radio" id="type-external" name="report-type" checked>
+                <label for="type-external">외부용 보고서</label>
+            </div>
+
+            <div class="uploader-card">
+                <div class="card-header">
+                    <div>
+                        <h2>Document Upload</h2>
+                        <p>Add your documents here, and you can upload up to 1 files max</p>
+                    </div>
+                    <button class="close-btn">&times;</button>
+                </div>
+                
+                <div class="drop-zone">
+                    <input type="file" id="file-input" hidden>
+                    <img src="images/icon-upload.svg" alt="Upload Icon">
+                    <p>Drag your file(s) to start uploading</p>
+                    <span>OR</span>
+                    <button type="button" class="browse-btn">Browse files</button>
+                </div>
+
+                <p class="support-text">Only support .hwpx and .docx and .pdf</p>
+
+                <div class="file-list"></div>
+
+                <div class="card-footer">
+                    <button type="button" class="cancel-btn">Cancel</button>
+                    <button type="button" class="next-btn">Next</button>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="upload.js"></script>
+</body>
+</html>
